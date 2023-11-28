@@ -9,58 +9,72 @@
 // @raycast.icon wg-icon.png
 // @raycast.packageName Wireguard
 
+const VPN_NAME = 'VPN NAME' // type wireguard vpn connection name
 
 import {exec} from 'child_process'
 import util from 'util'
 
-const COMMANDS = {
-	CMD_PATH: '/usr/sbin/scutil',
+class VPN {
+	constructor(id, name, status) {
+		this.id = id
+		this.name = name
+		this.status = status.includes('(Connected)')
+	}
+}
 
-	getVpnList: function() {
-		return `${this.CMD_PATH} --nc list | grep "com.wireguard.macos"`
-	},
+class WGControl {
+	VPN_NAME
+	CMD_PATH = '/usr/sbin/scutil'
+	VPN_LIST = `${this.CMD_PATH} --nc list | grep "com.wireguard.macos"`
+	REG_VPN = /(\(\w+\))\s+([\w-]+?)\s+VPN\s+\(.*?"(.*?)"?\s+\[VPN:/gm
 
-	startVpn: function(id) {
+	constructor(vpnName) {
+		this.VPN_NAME = vpnName
+	}
+
+	#startVpn(id) {
 		return `${this.CMD_PATH} --nc start ${id}`
-	},
+	}
 
-	stopVpn: function(id) {
+	#stopVpn(id) {
 		return `${this.CMD_PATH} --nc stop ${id}`
-	},
-}
+	}
 
-async function runScript(command) {
-	const execAsync = util.promisify(exec)
-	const {stdout} = await execAsync(command)
-	return stdout.replace(/\r?\n$/, '')
-}
+	#notFound() {
+		console.log(`VPN with ${this.VPN_NAME} name not found`)
+	}
 
-async function toggleVpn() {
-	const REG_VPN = /\* (\(\w+\))\s+([\w-]+?)\s+VPN\s+\(.*?"(.*?)"?\s+\[VPN:/gm
-	const VPNItems = []
-	const cmdResult = await runScript(COMMANDS.getVpnList())
-	let execString = REG_VPN.exec(cmdResult)
-	while (execString !== null) {
-		const isConnected = execString[1] === '(Connected)'
-		const sn = execString[2]
-		const VPNName = execString[3]
-		const VPNItem = {name: VPNName, sn: sn, isConnected: isConnected}
-		if (VPNName.includes('JLM')) {
-			VPNItems.push(VPNItem)
-			break
+	async #execScript(command) {
+		const execAsync = util.promisify(exec)
+		const {stdout} = await execAsync(command)
+		return stdout
+	}
+
+	async #findVpn() {
+		const scriptResult = await this.#execScript(this.VPN_LIST)
+		const splitedResult = scriptResult.split('\n').find(str => str.includes(this.VPN_NAME))
+		if (splitedResult) {
+			const parsedData = this.REG_VPN.exec(splitedResult)
+			return new VPN(parsedData[2], parsedData[3], parsedData[1])
 		}
-		execString = REG_VPN.exec(cmdResult)
 	}
-	if (!VPNItems.length) {
-		console.log('VPN not found')
-		return
-	}
-	const connection = VPNItems[0]
-	if (!connection.isConnected) {
-		await runScript(COMMANDS.startVpn(connection.sn))
-	} else {
-		await runScript(COMMANDS.stopVpn(connection.sn))
+
+	async toggleVpn() {
+		const vpnInstance = await this.#findVpn()
+		if (!vpnInstance) {
+			return this.#notFound()
+		}
+		this.VPN_NAME = vpnInstance.name
+		if (!vpnInstance.status) {
+			await this.#execScript(this.#startVpn(vpnInstance.id))
+			console.log(`${this.VPN_NAME} Connected`)
+		} else {
+			await this.#execScript(this.#stopVpn(vpnInstance.id))
+			console.log(`${this.VPN_NAME} Disconnected`)
+		}
 	}
 }
 
-void toggleVpn()
+const wgControl = new WGControl(VPN_NAME)
+void wgControl.toggleVpn()
+
